@@ -94,7 +94,7 @@ class FloatingChat:
         # 标题条（按住它拖动窗口）
         title = tk.Frame(self.root, bg="#3a3a3a")
         title.pack(fill="x")
-        label = tk.Label(title, text="Claude 悬浮窗", bg="#3a3a3a", fg=fg,
+        label = tk.Label(title, text="Claude", bg="#3a3a3a", fg=fg,
                          font=("Microsoft YaHei", 10, "bold"))
         label.pack(side="left", padx=10, pady=5)
         tk.Button(title, text="✕", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
@@ -108,7 +108,7 @@ class FloatingChat:
         # 设置面板（默认收起）
         self.settings = tk.Frame(self.root, bg=self.cfg["bg"])
         self._paint.append(self.settings)
-        tk.Label(self.settings, text="背景颜色", bg=self.cfg["bg"], fg=fg,
+        tk.Label(self.settings, text="Background", bg=self.cfg["bg"], fg=fg,
                  font=FONT).pack(anchor="w")
         row = tk.Frame(self.settings, bg=self.cfg["bg"])
         self._paint.append(row)
@@ -116,7 +116,7 @@ class FloatingChat:
         for c in PRESET_COLORS:
             tk.Button(row, bg=c, width=3, relief="flat", bd=1, cursor="hand2",
                       command=lambda col=c: self.set_bg(col)).pack(side="left", padx=2)
-        tk.Label(self.settings, text="透明度", bg=self.cfg["bg"], fg=fg,
+        tk.Label(self.settings, text="Opacity", bg=self.cfg["bg"], fg=fg,
                  font=FONT).pack(anchor="w")
         self.opacity_scale = tk.Scale(self.settings, from_=0.3, to=1.0,
                                       resolution=0.01, orient="horizontal",
@@ -150,7 +150,7 @@ class FloatingChat:
         self.input = tk.Text(bottom, height=3, bg="#3a3a3a", fg=fg, wrap="word",
                              font=FONT, insertbackground=fg)
         self.input.pack(side="left", fill="x", expand=True)
-        self.send_btn = tk.Button(bottom, text="发送", bg="#3d7eff", fg="white",
+        self.send_btn = tk.Button(bottom, text="Send", bg="#3d7eff", fg="white",
                                   font=FONT, command=self.send, padx=12)
         self.send_btn.pack(side="left", padx=(6, 0))
         self.input.bind("<Return>", self.send)               # Enter 发送
@@ -197,14 +197,14 @@ class FloatingChat:
         try:
             self.capture.open()
         except Exception as ex:
-            self._append_block(f"\n⚠️ 截图失败：{type(ex).__name__}: {ex}\n", "err")
+            self._append_block(f"\n⚠️ Screenshot failed: {type(ex).__name__}: {ex}\n", "err")
         self._sync_esc()
 
     def _on_region_selected(self, shot):
         self.pending_shot = shot        # 交给下一次 send() 消费
         self._append_block(
-            f"📷 已框选 {shot['w']}x{shot['h']}，输入问题后回车发送"
-            f"（Esc 取消）\n", "shot")
+            f"📷 Selected {shot['w']}x{shot['h']} — type your question, "
+            f"then press Enter  (Esc cancels)\n", "shot")
         self._raise_chat_window()       # 阶段2：抬窗 + 抢键盘焦点
 
     def _on_capture_cancel(self):
@@ -296,17 +296,17 @@ class FloatingChat:
 
         if shot is not None:
             self._append_block(
-                f"🙂 你：[截图 {shot['w']}x{shot['h']}] {text}\n", "user")
+                f"🙂 You: [screenshot {shot['w']}x{shot['h']}] {text}\n", "user")
             self.capture.close()       # 发出去了 = 阶段2结束，覆盖层消失
         else:
             if self.capture.active:    # 开着框选层却在打纯文字 → 放弃那个框
                 self.capture.close()
-            self._append_block(f"🙂 你：{text}\n", "user")
+            self._append_block(f"🙂 You: {text}\n", "user")
         self._sync_esc()
 
-        self._append_block("🤖 Claude：", "bot")
+        self._append_block("🤖 Claude: ", "bot")
         self.sending = True
-        self.send_btn.config(state="disabled", text="等待中")
+        self.send_btn.config(state="disabled", text="Waiting…")
         # 把异步任务提交给后台线程的事件循环，绝不阻塞界面
         coro = self._run_vision(text, shot) if shot else self._run(text)
         asyncio.run_coroutine_threadsafe(coro, self.loop)
@@ -325,7 +325,7 @@ class FloatingChat:
                 # tkinter 的 after 可以跨线程安全地调度UI更新
                 self.root.after(0, self._append, delta)
         except Exception as ex:
-            self.root.after(0, self._append_block, f"\n⚠️ 出错：{ex}\n", "err")
+            self.root.after(0, self._append_block, f"\n⚠️ Error: {ex}\n", "err")
         finally:
             self.root.after(0, self._finish)
 
@@ -343,13 +343,14 @@ class FloatingChat:
                 self.root.after(0, self._append, delta)
         except Exception as ex:
             self.root.after(0, self._append_block,
-                            f"\n⚠️ 截图提问失败：{type(ex).__name__}: {ex}\n", "err")
+                            f"\n⚠️ Screenshot question failed: "
+                            f"{type(ex).__name__}: {ex}\n", "err")
         finally:
             self.root.after(0, self._finish)
 
     def _finish(self):
         self.sending = False
-        self.send_btn.config(state="normal", text="发送")
+        self.send_btn.config(state="normal", text="Send")
         self._append_block("\n", "bot")
 
 

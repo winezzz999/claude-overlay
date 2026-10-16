@@ -56,8 +56,9 @@ class VisionSession:
         if self._client is None:
             if not self.token:
                 raise RuntimeError(
-                    "没找到 API 密钥：查一下 ~/.claude/settings.json 里的 "
-                    "ANTHROPIC_AUTH_TOKEN，或者设环境变量 DEEPSEEK_API_KEY")
+                    "No API token found. Check ANTHROPIC_AUTH_TOKEN in "
+                    "~/.claude/settings.json, or set the DEEPSEEK_API_KEY "
+                    "environment variable.")
             # 用 auth_token 而不是 api_key：兼容通道走 Authorization: Bearer
             self._client = anthropic.AsyncAnthropic(
                 auth_token=self.token, base_url=self.base_url, timeout=TIMEOUT)

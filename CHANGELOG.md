@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/) —
 `MAJOR.MINOR.PATCH`, where a leading `0` means the interface may still change.
 
+## [Unreleased]
+
+### Changed
+
+- The application UI is now in English (it was Chinese), so it matches the
+  documentation
+
 ## [0.1.0] - 2026-10-16
 
 First working version: floating window + region-select screenshot questions.

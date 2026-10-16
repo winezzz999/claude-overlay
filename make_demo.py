@@ -130,7 +130,7 @@ def main():
     out = OUT / "demo.gif"
     small[0].save(out, save_all=True, append_images=small[1:],
                   duration=DURATIONS, loop=0, optimize=True)
-    print(f"已写出 {out}  （{len(small)} 帧，{out.stat().st_size // 1024} KB）")
+    print(f"wrote {out}  ({len(small)} frames, {out.stat().st_size // 1024} KB)")
 
 
 if __name__ == "__main__":
