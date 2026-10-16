@@ -1,65 +1,139 @@
-# overlay — Claude 悬浮窗对话器
+# claude-overlay
 
-置顶半透明悬浮窗，窗口内直接与 Claude 对话（voice-claude 项目的一部分，当前独立开发）。
+**An always-on-top floating window for talking to Claude — type your question, or select any part of your screen and ask about it.**
 
-## 功能
+English · [中文](README.zh-CN.md)
 
-- 窗口置顶、无边框、整体半透明
-- 窗口内直接打字与 Claude 对话，回答流式显示
-- 同一窗口内连续追问保持上下文
-- 背景颜色 / 透明度可自定义，自动保存到 config.json
-- **按 `·` 键（数字 1 左边那个）框选屏幕任意区域，截图随问题一起发给模型**
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## 两种问法
+---
 
-| 操作 | 走哪条路 | 特点 |
-|---|---|---|
-| 直接打字回车 | `agent.py`（claude-agent-sdk） | 有上下文、能读项目文件、能用工具 |
-| `·` 框选后提问 | `vision.py`（直连兼容通道） | 一次性问答，截图以全分辨率发出，不并入上面的对话历史 |
+## The idea
 
-框选流程：
+Sometimes the thing you want to ask about is *right there on your screen* — an error message, a chart, a piece of UI that looks wrong. Screenshotting it, saving it, finding it, attaching it, then switching to a chat app is a lot of steps for a question you'll forget by the third one.
 
-1. 按 `·` 键（数字 1 左边那个）—— 整屏变暗，**框住的区域是正常亮度**，屏幕其余部分压暗
-2. 拖出矩形；松手后矩形固定，可以**再拖一次换一个新框**
-3. 悬浮窗自动跳到最前，输入框拿到光标
-4. 打字回车 —— 截图随问题一起发出，覆盖层消失，回答流式显示在聊天区
-5. 任意阶段按 `Esc` 或点右键 = 整个取消
+`claude-overlay` collapses that into: **press one key, drag a box, type.**
 
-框选区**别盖住悬浮窗自己** —— 悬浮窗是浮在屏幕上的，截图会把它一起拍进去。
+It stays out of your way as a small translucent window pinned on top of everything else — no taskbar entry, no window chrome, no alt-tabbing.
 
-## 运行
+## Features
+
+| | |
+|---|---|
+| **Always on top** | Borderless, translucent, draggable. Never gets buried. |
+| **Type to chat** | Streamed answers, with conversation context kept between turns. |
+| **Select and ask** | Press <kbd>·</kbd> (the key left of <kbd>1</kbd>). The screen dims, your selection stays bright, then just type your question. |
+| **Full-resolution capture** | The image sent to the model is the real screen pixels, not a downscaled preview. |
+| **Redo the selection** | Not happy with the box? Drag a new one — nothing is locked in until you send. |
+| **Remembers your look** | Background colour and opacity are saved to `config.json`. |
+
+## Requirements
+
+- **Python 3.10+** (required by `claude-agent-sdk`)
+- **Windows** — the window focus handling uses Win32 APIs directly
+- A Claude-compatible endpoint reachable with a token in `~/.claude/settings.json`
+
+## Quick start
 
 ```bash
 pip install -r requirements.txt
 python overlay.py
 ```
 
-界面基于 tkinter（Python 自带），只有截图和截图提问需要下面这几个包。
+Then either **type a question and press Enter**, or **press <kbd>·</kbd> and drag a box** first.
 
-## 文件
+## Usage
 
-- `overlay.py` — 悬浮窗界面 + 热键 + 阶段切换（tkinter）
-- `agent.py` — 文字对话（claude-agent-sdk，流式）
-- `capture.py` — 全屏框选层（变暗 + 选区亮洞、DPI 坐标换算）
-- `vision.py` — 截图提问（anthropic SDK 直连兼容通道，流式）
-- `test_sdk.py` / `test_vision.py` — 两个通道各自的验证脚本（开发用）
-- `config.json` — 背景设置（首次修改设置后自动生成）
+### Asking about something on screen
 
-## 已知事项
+1. Press <kbd>·</kbd> — the whole screen dims, but **your selection stays at full brightness**.
+2. Drag out a rectangle. Change your mind? Just drag another one.
+3. Release — the floating window jumps to the front and grabs keyboard focus.
+4. Type your question, press Enter. The image goes out with it.
+5. <kbd>Esc</kbd> or right-click cancels the whole thing at any point.
 
-- **热键在源码里为什么写成反引号 `` ` `` 而不是 `·` 或 `<192>`**
-  （这里踩过两个坑，改热键时别再踩）：
-  - **不能写 `·`**：你按的那个键屏幕上是 `·`，但那是**输入法在上层加工的**；
-    pynput 在底层拿到的是键盘布局的原始字符 —— 反引号 `` ` ``。字符对不上就不触发。
-  - **也不能写 vk 编号 `<192>`**：pynput 比对热键之前会先做一次 `canonical`
-    规范化，**只要按键带字符就把 vk 丢掉、只留字符**，于是
-    `from_vk(192)`（没有字符）永远比不中，表现就是「按了没反应」。
-  - **结论**：老老实实写底层真正看到的那个字符。
-- 热键定义在 `capture.py` 顶部的 `HOTKEY` 一行（`overlay.py` 是从那里 import 的），
-  想换成 `"<ctrl>+<alt>+s"` 这类组合键改那里就行。
-- **DPI 缩放**：显示器设成 125% 时，Tk 的坐标空间和截图的实际像素不是一回事。
-  `capture.py` 在运行时算比例（`截图宽 / Tk屏宽`）来换算，没有写死数字，
-  所以换显示器或改缩放比例都不用动代码。
-- **首字延迟**：截图提问的第一段回答大约要等 5～7 秒（图片大，模型要先看图）。
-  等待期间聊天区已经显示了「🤖 Claude：」，不是卡死。
-- 密钥从 `~/.claude/settings.json` 的 env 里读，**不在代码里**。
+> **Keep the selection away from the floating window itself** — it's drawn on top of the screen, so it ends up in the capture.
+
+### Asking about anything else
+
+Just type. This goes through a persistent Claude session, so it keeps context across turns and can read files in the project.
+
+These are deliberately **two separate channels** — see below.
+
+## How it works
+
+```
+                    ┌─────────────────┐
+   type + Enter ───▶│  agent.py       │  claude-agent-sdk
+                    │  ClaudeSession  │  persistent, has tools, has context
+                    └─────────────────┘
+                    ┌─────────────────┐
+  · + drag + Enter ─▶│  vision.py      │  anthropic SDK
+                    │  VisionSession  │  one-shot, image + text, no history
+                    └─────────────────┘
+```
+
+Screenshot questions are intentionally **one-shot**: they don't inherit or pollute the chat history. That keeps "what does this error mean?" from derailing a long coding conversation.
+
+### Two details worth knowing
+
+**Dimming without `-alpha`.** The obvious way to dim the screen is a translucent `Toplevel`. It doesn't work: `-alpha` applies to the *whole* window, so your selection dims along with everything else. Instead, `capture.py` takes a screenshot, darkens a copy of it, puts that darkened copy on a `Canvas` as the background, and pastes the *original* pixels back in as the selection — a bright hole cut out of a dark screen.
+
+**DPI scaling.** On a display scaled to 125%, Tk's coordinate space and the actual screenshot pixels are **not the same thing** (2048×1280 vs 2560×1600 on the machine this was built on). `capture.py` computes the ratio at runtime as `screenshot_width / tk_screen_width` rather than hardcoding it, so changing displays or scaling needs no code changes.
+
+## Files
+
+| File | What it does |
+|---|---|
+| `overlay.py` | The floating window, hotkey handling, stage transitions |
+| `agent.py` | Text chat via `claude-agent-sdk` (streaming, keeps context) |
+| `capture.py` | Full-screen region selector: dimming, bright hole, DPI conversion |
+| `vision.py` | Screenshot questions via the `anthropic` SDK (streaming) |
+| `test_sdk.py`, `test_vision.py` | Verification scripts for each channel |
+
+## Configuration
+
+`config.json` is created the first time you change the background colour or opacity from the ⚙ panel. Deleting it just resets to defaults.
+
+Credentials are **never** stored in this repo — they're read at runtime from `~/.claude/settings.json`.
+
+## Known limitations
+
+- **Windows only.** The focus-stealing code uses Win32 APIs directly.
+- **The floating window can end up in your screenshot** if your selection covers it.
+- **First token takes 5–7 seconds** on screenshot questions — the model has to look at the image first. The chat area shows `🤖 Claude：` immediately, so it doesn't look frozen.
+- **The hotkey is hardcoded** to `·` in `capture.py`. See the comments there before changing it — there are two non-obvious traps.
+
+## Contributing
+
+**Any kind of contribution is welcome — and that includes ideas, not just code.**
+
+- 🐛 **Found a bug?** [Open an issue](https://github.com/winezzz999/claude-overlay/issues/new). A screenshot and what you expected to happen is plenty.
+- 💡 **Got an idea?** Feature requests are genuinely welcome — including half-formed ones. "Wouldn't it be cool if…" is a perfectly good issue.
+- 🗣️ **Want to talk about it?** Start a thread in [Discussions](https://github.com/winezzz999/claude-overlay/discussions). How you use it, what you wish it did, what annoys you — it's all useful.
+- 🔧 **Want to write code?** Fork it, branch, and open a PR.
+
+There are no dumb questions here. If something feels off while you're using it, that's valuable information — please say so.
+
+If you do want to send code:
+
+1. Create a branch: `git switch -c feature/your-idea`
+2. Keep `main` working — that's the whole point of branching
+3. Open a PR describing **what problem it solves**, not just what it changes
+
+Small, focused PRs are easier to review and land faster than large ones.
+
+## Roadmap
+
+- [ ] **Voice input** — select a region, hold a key, speak your question; image and text go out together
+- [ ] **Package as a skill** so it can be shared with VS Code extension users
+- [ ] **Cross-platform support** (macOS / Linux)
+- [ ] Make the hotkey configurable
+
+Have an opinion on what should come first? [Say so in Discussions](https://github.com/winezzz999/claude-overlay/discussions).
+
+## License
+
+[MIT](LICENSE) — use it, change it, ship it.
