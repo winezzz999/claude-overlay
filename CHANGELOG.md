@@ -1,37 +1,49 @@
-# 更新日志
+# Changelog
 
-格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
-`主版本.次版本.修订号` —— 0 开头表示接口还可能大改。
+English · [中文](CHANGELOG.zh-CN.md)
+
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+versioning follows [Semantic Versioning](https://semver.org/) —
+`MAJOR.MINOR.PATCH`, where a leading `0` means the interface may still change.
 
 ## [0.1.0] - 2026-10-16
 
-第一个能跑的版本：悬浮窗 + 框选截图提问。
+First working version: floating window + region-select screenshot questions.
 
-### 新增
+### Added
 
-- 置顶、无边框、半透明的 tkinter 悬浮窗；背景色和透明度可自定义并保存
-- 窗口内直接打字对话，回答流式显示；同一窗口内连续追问保持上下文
-- 按 `·` 键（数字 1 左边那个）框选屏幕区域：**整屏变暗、框内保持正常亮度**
-- 框选后直接在悬浮窗里打字提问，截图以**物理分辨率**随问题一起发出
-- 松手后可以再拖一个新框，不必重来；`Esc` 或右键取消整个流程
+- Always-on-top, borderless, translucent tkinter window; background colour and
+  opacity are configurable and persisted to `config.json`
+- Chat by typing in the window — streamed answers, with context kept across turns
+- Press <kbd>·</kbd> (the key left of <kbd>1</kbd>) to select a screen region:
+  **the whole screen dims while your selection stays at full brightness**
+- Type your question in the floating window after selecting; the screenshot goes
+  out alongside it at **full physical resolution**
+- Drag a new box after releasing the mouse — nothing is locked in until you send
+- <kbd>Esc</kbd> or right-click cancels the flow at any point
 
-### 说明
+### Notes
 
-- 截图提问走独立的一次性请求（`vision.py`），**不并入**文字对话的历史
-- 显示器 125% 缩放时，Tk 的坐标空间和截图的实际像素不是一回事，
-  换算比例在运行时算（`截图宽 / Tk屏宽`），没有写死数字
-- 密钥从 `~/.claude/settings.json` 读取，仓库里不含任何凭据
+- Screenshot questions go through a separate one-shot request (`vision.py`) and
+  are **not** merged into the text conversation history
+- At 125% display scaling, Tk's coordinate space and the actual screenshot pixels
+  are not the same thing. The ratio is computed at runtime
+  (`screenshot width / tk screen width`) rather than hardcoded, so changing
+  displays or scaling needs no code changes
+- Credentials are read at runtime from `~/.claude/settings.json` — the repository
+  contains none
 
-### 已知限制
+### Known limitations
 
-- 框选区如果盖住悬浮窗自己，会把悬浮窗一起拍进截图
-- 截图提问的首字延迟约 5～7 秒（图片较大，模型要先看图）
-- 语音提问尚未接入（见路线图）
+- If the selection covers the floating window itself, the window ends up in the
+  screenshot
+- The first token of a screenshot answer takes 5–7 seconds (the image is large;
+  the model has to read it first)
+- Voice input is not wired up yet
 
-## 路线图
+## Roadmap
 
-- [ ] 语音提问：框选后按住左 Alt 说问题，图 + 文字一起发
-- [ ] 打包成 skill，分享给 VS Code 插件用户
+See the [roadmap in the README](README.md#roadmap) — kept in one place so the two
+don't drift apart.
 
 [0.1.0]: https://github.com/winezzz999/claude-overlay/releases/tag/v0.1.0
