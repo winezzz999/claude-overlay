@@ -4,9 +4,9 @@
 特性：置顶、半透明、无边框、灰色背景（颜色/透明度可自定义，保存到 config.json）
 
 两种问法：
-  打字回车   → 走 agent.py 的 Claude 会话，有上下文、能用工具
-  F1 框选    → 截图随问题一起发给模型（独立的一次性问答，见 vision.py）
-               热键想改的话，改 capture.py 顶部的 HOTKEY 一行即可
+  打字回车          → 走 agent.py 的 Claude 会话，有上下文、能用工具
+  · 键框选（1 左边） → 截图随问题一起发给模型（独立的一次性问答，见 vision.py）
+                      热键想改的话，改 capture.py 顶部的 HOTKEY 一行即可
 """
 import asyncio
 import ctypes

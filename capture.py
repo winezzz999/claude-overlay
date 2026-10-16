@@ -22,13 +22,17 @@ import tkinter as tk
 
 from PIL import Image, ImageEnhance, ImageGrab, ImageTk
 
-HOTKEY = "<f1>"                # 全局热键。注意 F1 同时是系统的"帮助"键，
-                               # pynput 不吞按键，前台程序可能也会响应
+# 全局热键。192 = VK_OEM_3，就是数字 1 左边那个键（中文输入法下打出 · 的键）。
+# ⚠️ 不能直接写真字符 "·"：pynput 在底层看到的是反引号 `，不是输入法加工后的 ·，
+#    字符对不上就永远不触发。用 <192> 这种 vk 写法才稳（和键盘布局、输入法都无关）。
+HOTKEY = "<192>"
 MIN_SIZE = 5                   # 小于 5 像素的框当作误触
 DARK = 0.35                    # 变暗程度：1=原图，0=全黑
 REPAINT_MS = 30                # 拖动时重画亮洞的最小间隔（约 33 帧/秒）
 MAX_PNG_BYTES = 4_000_000      # 超过就先缩小再编码，避免请求体过大被通道拒
-HIDE_ROOT_ON_GRAB = True       # 抓屏前把悬浮窗藏起来（否则会被拍进截图）
+HIDE_ROOT_ON_GRAB = False      # 抓屏前要不要把悬浮窗藏起来（藏约 60 毫秒，抓完立刻恢复）
+                               # True  = 截图里绝不会有悬浮窗，代价是会闪一下
+                               # False = 悬浮窗不闪，但框选区如果盖住它，它会被拍进图里
 
 
 class CaptureOverlay:
