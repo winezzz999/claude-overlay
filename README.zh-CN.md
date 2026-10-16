@@ -8,6 +8,8 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+![按 · 键后整屏变暗，拖出的区域保持正常亮度](docs/demo.gif)
+
 ---
 
 ## 为什么做这个

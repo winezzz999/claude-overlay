@@ -8,6 +8,8 @@ English · [中文](README.zh-CN.md)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+![Pressing · dims the whole screen, and the region you drag out stays at full brightness](docs/demo.gif)
+
 ---
 
 ## The idea
