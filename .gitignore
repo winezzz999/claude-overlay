@@ -1,3 +1,6 @@
 __pycache__/
 config.json
 verify_screen.png
+
+# 运行时生成
+capture_*.png
