@@ -1,19 +1,20 @@
-"""快速测试：验证 claude-agent-sdk 的登录状态和流式 API
+"""Quick test: verify claude-agent-sdk login state and streaming API
 
-运行：python test_sdk.py
+Run: python test_sdk.py
 """
 import asyncio
 import json
 import os
 from claude_agent_sdk import query, ClaudeAgentOptions
 
-# 从 Claude Code 的配置里读取环境变量（API地址/模型/令牌），原样传给SDK
+# Read the environment (API endpoint / model / token) from Claude Code's own
+# config and pass it to the SDK unchanged
 settings = json.load(open(os.path.expanduser("~/.claude/settings.json"), encoding="utf-8"))
 env = dict(settings.get("env") or {})
 
 
 def describe_ev(ev):
-    """把 StreamEvent 里的原始事件字典压缩成一行描述"""
+    """Compress the raw event dict inside a StreamEvent into one line"""
     t = ev.get("type")
     if t == "stream_event":
         inner = ev.get("event", {})
@@ -41,7 +42,7 @@ async def main():
                 print(f"init: cwd={m.data.get('cwd')} model={m.data.get('model')}")
             elif m.subtype == "result":
                 print(f"result: {str(m.data)[:100]}")
-            # 跳过 status / thinking_tokens 等噪音
+            # skip noise like status / thinking_tokens
         elif name == "StreamEvent":
             print(describe_ev(m.event or {}))
         elif name == "ResultMessage":

@@ -1,13 +1,14 @@
-"""生成 README 顶部那张演示图（docs/demo.gif）。
+"""Generate the demo image at the top of the README (docs/demo.gif).
 
-跑法：python make_demo.py
+Run: python make_demo.py
 
-⚠️ 运行时会有一个全屏窗口盖住你的桌面约 5 秒 —— 这是必须的，因为
-   框选层是靠「抓屏」工作的，得先有东西可抓。**它抓的是脚本自己画的
-   合成桌面，不是你的真实屏幕**，所以不会把你桌面上开着的东西拍进去。
+WARNING: a full-screen window covers your desktop for about 5 seconds — that is
+unavoidable, because the selector works by grabbing the screen, so there has to
+be something on it to grab. It grabs the SYNTHETIC desktop this script draws,
+not your real screen, so nothing you have open is captured.
 
-改了框选层的外观（变暗程度、边框颜色、提示文字）之后重跑一次，
-演示图就跟着更新了。
+Re-run this after changing how the selector looks (dim level, outline colour,
+hint text) and the demo image updates with it.
 """
 import sys
 import time
@@ -21,49 +22,51 @@ from capture import CaptureOverlay
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "docs"
 
-# 演示图的取景（Tk 逻辑坐标），想让取景框挪个位置就改这里
+# What the demo frames are cropped to (Tk logical coordinates)
 CROP_TK = (0, 0, 1700, 1150)
-# 各帧停留时长（毫秒）：先停一下看清「整屏变暗」，最后停一下看清「框选结果」
-# 注意要和实际帧数对齐 —— 共 5 帧：1 帧全暗 + 4 帧框选过程。
-# （别在后面再加一帧一模一样的「停一拍」：PIL 存 GIF 时会把连续相同的帧
-#   合并掉，时长叠加到前一帧，结果帧数和 DURATIONS 对不上。）
+# How long each frame is held, in milliseconds: a beat on "the screen dims",
+# a beat on the finished selection. Must match the actual frame count — 5 frames:
+# one fully dimmed plus four steps of the selection.
+# (Don't append another identical "hold" frame at the end: PIL merges consecutive
+#  identical frames when saving a GIF and folds their duration into the previous
+#  one, which leaves the frame count out of sync with DURATIONS.)
 DURATIONS = [700, 250, 250, 250, 1400]
 
 
 def make_desktop(w, h):
-    """画一个像模像样的「代码编辑器」，让变暗/变亮有对比可看。
+    """Draw a plausible-looking "code editor" so the dimming has something to contrast with.
 
-    这里故意用色块而不是真文字 —— 一眼能看出是内容，又不用编造任何
-    具体的代码或界面。
+    Deliberately made of coloured blocks rather than real text — it reads as
+    content at a glance without inventing any particular code or UI.
     """
     img = Image.new("RGB", (w, h), "#1b1d23")
     d = ImageDraw.Draw(img)
 
-    # 顶栏 + 三个窗口圆点
+    # Title bar + three window dots
     d.rectangle([0, 0, w, 52], fill="#23262e")
     for i, c in enumerate(("#ff5f57", "#febc2e", "#28c840")):
         x = 24 + i * 30
         d.ellipse([x, 18, x + 16, 34], fill=c)
     d.rounded_rectangle([130, 14, 560, 38], radius=8, fill="#2d313a")
 
-    # 左侧边栏
+    # Left sidebar
     d.rectangle([0, 52, 330, h], fill="#22242b")
     for i in range(20):
         y = 84 + i * 48
         if y > h - 40:
             break
-        if i == 5:      # 假装这一项是选中的
+        if i == 5:      # pretend this row is selected
             d.rounded_rectangle([12, y - 10, 318, y + 26], radius=8, fill="#2f3540")
         d.rounded_rectangle([34, y, 34 + (170 + (i * 41) % 110), y + 13], radius=6,
                             fill="#6f7d94" if i == 5 else "#464e5c")
 
-    # 主区：假装是语法高亮的代码 —— 不同颜色的圆角条
+    # Main area: pretend this is syntax-highlighted code — coloured rounded bars
     palette = ("#7aa2f7", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff", "#f7768e")
     for row in range(26):
         y = 92 + row * 46
         if y > h - 50:
             break
-        x = 390 + (row % 4) * 34          # 缩进
+        x = 390 + (row % 4) * 34          # indentation
         for k in range(2 + (row * 7) % 5):
             width = 70 + ((row * 53 + k * 71) % 260)
             d.rounded_rectangle([x, y, x + width, y + 17], radius=5,
@@ -84,42 +87,45 @@ def main():
     vw, vh = root.winfo_vrootwidth(), root.winfo_vrootheight()
     root.geometry(f"{vw}x{vh}+{root.winfo_vrootx()}+{root.winfo_vrooty()}")
 
-    # 必须留引用，否则 PhotoImage 被回收、背景变白
+    # The reference must be held, or the PhotoImage is collected and the
+    # background turns white
     photo = ImageTk.PhotoImage(make_desktop(vw, vh))
     tk.Label(root, image=photo, bd=0, highlightthickness=0).pack(fill="both",
                                                                  expand=True)
     root.update()
-    time.sleep(0.4)              # 等桌面合成器真的把这块背景画出来
+    time.sleep(0.4)              # let the compositor actually paint this backdrop
 
     frames = []
     cap = CaptureOverlay(root)
     try:
-        cap.open()               # 走真实的框选层：抓屏 + 建变暗底图
+        cap.open()               # the real selector: grab the screen, build the dark copy
 
-        # 第一帧：刚弹出、还没开始框，让人看清「整屏变暗」这件事本身
+        # First frame: just opened, nothing selected yet — so "the whole screen
+        # dims" is visible on its own
         cap._hide_hole()
         root.update()
         time.sleep(0.5)
         frames.append(ImageGrab.grab(all_screens=True))
 
-        # 接着框从小到大，走的是真实的绘制代码
+        # Then the box grows, through the real drawing code
         boxes = [
-            (620, 300, 760, 400),      # 刚拖出一点
+            (620, 300, 760, 400),      # just started dragging
             (620, 300, 980, 580),
             (620, 300, 1180, 760),
-            (620, 300, 1340, 900),     # 定稿（这一帧停留最久）
+            (620, 300, 1340, 900),     # settled (this frame is held longest)
         ]
         for box in boxes:
             cap._box = box
-            cap._paint_now()           # 真实代码：裁原图贴亮洞 + 画边框和尺寸
-            root.update()
-            time.sleep(0.12)           # 等渲染落屏
+            cap._paint_now()           # real code: crop the original, paste the hole,
+            root.update()              # draw the outline and size label
+            time.sleep(0.12)           # let it land on screen
             frames.append(ImageGrab.grab(all_screens=True))
     finally:
         cap.close()
         root.destroy()
 
-    # 裁到取景范围再缩小（截到的是物理像素，要按比例换算）
+    # Crop to the region of interest, then shrink. (The grabs are physical pixels,
+    # so the Tk-space crop has to be scaled.)
     scale = frames[0].width / vw
     crop = tuple(int(v * scale) for v in CROP_TK)
     small = []

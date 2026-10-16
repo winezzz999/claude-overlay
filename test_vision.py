@@ -1,7 +1,7 @@
-"""快速测试：单独验证「截图提问」通道（完全不碰 tkinter）
+"""Quick test: verify the screenshot-question channel on its own (no tkinter at all)
 
-运行：python test_vision.py [图片路径]
-默认用目录里的 verify_screen.png。
+Run: python test_vision.py [path/to/image.png]
+Defaults to verify_screen.png in this directory.
 """
 import asyncio
 import base64
