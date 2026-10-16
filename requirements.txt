@@ -1,1 +1,4 @@
 claude-agent-sdk
+anthropic>=1.0
+Pillow>=10
+pynput
