@@ -1,14 +1,16 @@
-"""vision.py — 截图提问：一次性的「图 + 问题」调用
+"""vision.py — screenshot questions: a one-shot "image + question" call
 
-为什么不走 agent.py 的 ClaudeSession：
-  那是 claude-agent-sdk（Claude Code 那套带工具、带会话的循环），
-  而截图提问是一问一答、不带上下文、要把图片塞进消息里，
-  用 anthropic SDK 直接打 Anthropic 兼容通道最简单 —— 和 capture_ask.py 同一条路。
+Why this does not go through agent.py's ClaudeSession:
+  that one is claude-agent-sdk — Claude Code's tool-using, context-keeping
+  loop. A screenshot question is one question, one answer, no context, with
+  an image attached. Hitting the Anthropic-compatible endpoint directly with
+  the anthropic SDK is the simplest thing that works.
 
-通道是 DeepSeek 的 Anthropic 兼容代理，不是 api.anthropic.com：
-  - 只发最小请求体，别带 thinking / system 这些 Claude 专有字段
-  - 流式支持没有保证，所以要能退回非流式
-  - 密钥从 ~/.claude/settings.json 的 env 里读，绝不写进代码（这仓库要 push）
+The endpoint is DeepSeek's Anthropic-compatible proxy, NOT api.anthropic.com:
+  - send the smallest possible request body; no thinking / system fields
+  - streaming support is not guaranteed, so there has to be a fallback
+  - the token is read at runtime from ~/.claude/settings.json and never
+    written into the code (this repository gets pushed)
 """
 import os
 import re
@@ -19,15 +21,16 @@ from agent import _load_env
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic"
 DEFAULT_MODEL = "deepseek-flash"
-MAX_TOKENS = 4096       # 和 capture_ask.py 一致；调大可能被通道拒
-TIMEOUT = 120.0         # 代理卡死时别永远挂着
+MAX_TOKENS = 4096       # matches capture_ask.py; raising it may be rejected
+TIMEOUT = 120.0         # so a wedged proxy doesn't hang forever
 
 
 def _plain_model(name):
-    """剥掉 Claude Code 的模型后缀语法：'deepseek-flash[1m]' → 'deepseek-flash'。
+    """Strip Claude Code's model-suffix syntax: 'deepseek-flash[1m]' → 'deepseek-flash'.
 
-    [1m] 是 Claude Code 自己的「1M 上下文」标记，由它发请求前剥掉；
-    原生 SDK 把带后缀的名字直接传过去，兼容通道多半会 404。
+    `[1m]` is Claude Code's own "1M context" marker, which it strips before
+    sending the request. Passing a name with the suffix straight to the raw SDK
+    will most likely 404 on a compatible proxy.
     """
     if not name:
         return DEFAULT_MODEL
@@ -35,12 +38,12 @@ def _plain_model(name):
 
 
 def _pick(name, default, env):
-    """优先级：环境变量 > settings.json 的 env > 默认值"""
+    """Precedence: environment variable > settings.json env > default"""
     return os.environ.get(name) or env.get(name) or default
 
 
 class VisionSession:
-    """一次性的截图问答。接口形状和 agent.ClaudeSession 保持一致（异步生成器）。"""
+    """One-shot screenshot Q&A. Same shape as agent.ClaudeSession (async generator)."""
 
     def __init__(self):
         env = _load_env()
@@ -49,23 +52,25 @@ class VisionSession:
         self.token = (_pick("ANTHROPIC_AUTH_TOKEN", "", env)
                       or os.environ.get("DEEPSEEK_API_KEY"))
         self._client = None
-        self._stream_ok = True      # 通道不吃流式时置 False，之后直接走非流式
+        self._stream_ok = True      # set False if the proxy rejects streaming
 
     def _get_client(self):
-        """懒创建：没有密钥时不要一启动就崩，等用户真提问了再报错。"""
+        """Built lazily: don't crash at startup without a token — complain when
+        the user actually asks something."""
         if self._client is None:
             if not self.token:
                 raise RuntimeError(
                     "No API token found. Check ANTHROPIC_AUTH_TOKEN in "
                     "~/.claude/settings.json, or set the DEEPSEEK_API_KEY "
                     "environment variable.")
-            # 用 auth_token 而不是 api_key：兼容通道走 Authorization: Bearer
+            # auth_token rather than api_key: the compatible proxy uses
+            # Authorization: Bearer
             self._client = anthropic.AsyncAnthropic(
                 auth_token=self.token, base_url=self.base_url, timeout=TIMEOUT)
         return self._client
 
     async def ask_stream(self, question, image_b64, media_type="image/png"):
-        """异步生成器：逐段产出回答文本。"""
+        """Async generator: yields the answer in pieces."""
         messages = [{"role": "user", "content": [
             {"type": "image", "source": {
                 "type": "base64", "media_type": media_type, "data": image_b64}},
@@ -83,13 +88,15 @@ class VisionSession:
                         yield text
                 return
             except anthropic.APIStatusError as ex:
-                # 只在「一个字都还没吐」且是 400/404（通道不认 stream）时降级。
-                # 已经吐过字就不能重来，否则答案会重复；429/5xx 交给 SDK 自己重试
+                # Only fall back when nothing has been emitted yet AND the proxy
+                # said 400/404 (the usual "I don't do stream=true" signals).
+                # Retrying after text was already sent would duplicate the
+                # answer; 429/5xx are left to the SDK's own retries.
                 if emitted or ex.status_code not in (400, 404):
                     raise
                 self._stream_ok = False
 
         resp = await self._get_client().messages.create(
             model=self.model, max_tokens=MAX_TOKENS, messages=messages)
-        # content 里可能有 thinking 块，只挑 text 块拼答案
+        # content may contain thinking blocks; keep only the text ones
         yield "".join(b.text for b in resp.content if b.type == "text")

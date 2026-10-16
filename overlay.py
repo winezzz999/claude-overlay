@@ -1,12 +1,15 @@
-"""overlay.py — 置顶半透明悬浮窗（tkinter）
+"""overlay.py — an always-on-top translucent floating window (tkinter)
 
-运行：python overlay.py
-特性：置顶、半透明、无边框、灰色背景（颜色/透明度可自定义，保存到 config.json）
+Run: python overlay.py
+Features: always on top, translucent, borderless, grey background
+          (colour and opacity are configurable and saved to config.json)
 
-两种问法：
-  打字回车          → 走 agent.py 的 Claude 会话，有上下文、能用工具
-  · 键框选（1 左边） → 截图随问题一起发给模型（独立的一次性问答，见 vision.py）
-                      热键想改的话，改 capture.py 顶部的 HOTKEY 一行即可
+Two ways to ask:
+  type + Enter      -> goes through agent.py's Claude session: has context,
+                       can use tools
+  · key to select   -> the screenshot goes out with your question (a separate
+                       one-shot call, see vision.py)
+                       To change the hotkey, edit HOTKEY in capture.py.
 """
 import asyncio
 import ctypes
@@ -24,11 +27,13 @@ from vision import VisionSession
 
 
 def _allow_foreground():
-    """Windows 只允许前台进程抢键盘焦点。
+    """Windows only lets the foreground process steal keyboard focus.
 
-    热键是从别的程序里按下的，那一刻本进程不是前台，SetForegroundWindow
-    会被拒绝（只在任务栏闪一下）—— 表现出来就是「框完选截图，打字没反应」。
-    这一句一次性放开限制，必须在第一次抢焦点之前调用。
+    The hotkey is pressed while some other program is in the foreground, so at
+    that moment this process is not it, and SetForegroundWindow gets refused
+    (the taskbar button just flashes) — which shows up as "I selected a region
+    but typing does nothing". This lifts the restriction once and for all, and
+    must be called before the first attempt to steal focus.
     """
     try:
         ctypes.windll.user32.AllowSetForegroundWindow(-1)   # ASFW_ANY
@@ -37,7 +42,7 @@ def _allow_foreground():
 
 CONFIG_FILE = Path(__file__).parent / "config.json"
 DEFAULTS = {"bg": "#2e2e2e", "opacity": 0.92}
-PRESET_COLORS = ["#2e2e2e", "#1e1e1e", "#23272e", "#3d3d3d"]   # 灰/深灰/蓝灰/浅灰
+PRESET_COLORS = ["#2e2e2e", "#1e1e1e", "#23272e", "#3d3d3d"]   # grey/dark/slate/light
 FONT = ("Microsoft YaHei", 10)
 
 
@@ -55,43 +60,45 @@ def save_config(cfg):
 
 class FloatingChat:
     def __init__(self):
-        _allow_foreground()   # 必须赶在第一次抢焦点之前
+        _allow_foreground()   # must happen before the first focus grab
 
         self.cfg = load_config()
         self.session = ClaudeSession(cwd=str(Path(__file__).parent))
         self.sending = False
-        self._paint = []   # 所有需要跟着换背景色的控件
+        self._paint = []   # every widget that follows the background colour
 
         self.root = tk.Tk()
-        self.root.overrideredirect(True)                    # 无边框（关闭按钮在标题条上）
-        self.root.attributes("-topmost", True)              # 置顶
-        self.root.attributes("-alpha", self.cfg["opacity"]) # 整体半透明
+        self.root.overrideredirect(True)                    # borderless (close button is in the title bar)
+        self.root.attributes("-topmost", True)              # always on top
+        self.root.attributes("-alpha", self.cfg["opacity"]) # whole-window translucency
         self.root.geometry("430x580+120+120")
         self._paint.append(self.root)
 
-        # --- 截图提问这条线 ---
+        # --- the screenshot-question side ---
         self.vision = VisionSession()
-        self.pending_shot = None    # 待发送的截图；None = 没有。下一次 send() 消费它
-        self.capture = CaptureOverlay(   # 构造不弹窗，open() 才弹
-            self.root, on_selected=self._on_region_selected,
+        self.pending_shot = None    # screenshot waiting to be sent; None = none.
+                                    # Consumed by the next send().
+        self.capture = CaptureOverlay(   # constructing it doesn't show anything;
+            self.root, on_selected=self._on_region_selected,   # open() does
             on_cancel=self._on_capture_cancel)
-        self._events = queue.Queue()     # pynput 线程 → Tk 线程
-        self._esc_bound = False          # 初值 False，好让首次 _sync_esc() 真的去绑
+        self._events = queue.Queue()     # pynput thread -> Tk thread
+        self._esc_bound = False          # starts False so the first _sync_esc() binds
 
-        # 异步事件循环跑在后台线程：SDK 的流式回答不阻塞界面
+        # The asyncio loop runs on a background thread: streamed answers from the
+        # SDK must not block the UI
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
 
         self._build_ui()
         self._start_hotkeys()
-        self.root.after(30, self._drain_events)   # 排空 pynput 线程投来的信号
+        self.root.after(30, self._drain_events)   # drain signals from the pynput thread
         self.root.mainloop()
 
-    # ---------- 界面 ----------
+    # ---------- UI ----------
     def _build_ui(self):
         fg = "#e8e8e8"
 
-        # 标题条（按住它拖动窗口）
+        # Title bar (hold it to drag the window)
         title = tk.Frame(self.root, bg="#3a3a3a")
         title.pack(fill="x")
         label = tk.Label(title, text="Claude", bg="#3a3a3a", fg=fg,
@@ -105,7 +112,7 @@ class FloatingChat:
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
 
-        # 设置面板（默认收起）
+        # Settings panel (collapsed by default)
         self.settings = tk.Frame(self.root, bg=self.cfg["bg"])
         self._paint.append(self.settings)
         tk.Label(self.settings, text="Background", bg=self.cfg["bg"], fg=fg,
@@ -126,7 +133,7 @@ class FloatingChat:
         self.opacity_scale.set(self.cfg["opacity"])
         self.opacity_scale.pack(fill="x")
 
-        # 聊天区：用 Text 的 tag 模拟气泡（你=蓝底，Claude=灰底）
+        # Transcript: Text widget tags stand in for bubbles (you = blue, Claude = grey)
         self.chat = tk.Text(self.root, bg=self.cfg["bg"], fg=fg, wrap="word",
                             bd=0, font=FONT, state="disabled", padx=10, pady=8,
                             cursor="arrow")
@@ -143,7 +150,7 @@ class FloatingChat:
                                 lmargin1=10, lmargin2=10, rmargin=10,
                                 spacing1=4, spacing3=4)
 
-        # 输入区
+        # Input area
         bottom = tk.Frame(self.root, bg=self.cfg["bg"])
         self._paint.append(bottom)
         bottom.pack(fill="x", pady=6, padx=8)
@@ -153,20 +160,21 @@ class FloatingChat:
         self.send_btn = tk.Button(bottom, text="Send", bg="#3d7eff", fg="white",
                                   font=FONT, command=self.send, padx=12)
         self.send_btn.pack(side="left", padx=(6, 0))
-        self.input.bind("<Return>", self.send)               # Enter 发送
-        self.input.bind("<Shift-Return>", lambda e: None)    # Shift+Enter 换行
-        self._sync_esc()                                     # Esc 的归属见该方法
+        self.input.bind("<Return>", self.send)               # Enter sends
+        self.input.bind("<Shift-Return>", lambda e: None)    # Shift+Enter newline
+        self._sync_esc()                                     # see that method for why
 
-    # ---------- 窗口拖动 ----------
+    # ---------- window dragging ----------
     def _drag_start(self, e):
         self._dx, self._dy = e.x, e.y
 
     def _drag_move(self, e):
         self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
 
-    # ---------- 截图提问 ----------
+    # ---------- screenshot questions ----------
     def _start_hotkeys(self):
-        # pynput 的回调跑在它自己的线程里，只往队列丢信号，绝不直接碰 Tk
+        # pynput's callbacks run on their own thread; they only drop a signal on
+        # the queue and never touch Tk directly
         self._hotkey_listener = keyboard.GlobalHotKeys(
             {HOTKEY: lambda: self._events.put("HOTKEY")})
         self._hotkey_listener.start()
@@ -178,7 +186,7 @@ class FloatingChat:
             self._events.put("ESC")
 
     def _drain_events(self):
-        """每 30ms 在 Tk 线程里把队列里的信号取出来执行（Tk 不是线程安全的）"""
+        """Every 30ms, run the queued signals on the Tk thread (Tk is not thread-safe)"""
         try:
             while True:
                 ev = self._events.get_nowait()
@@ -193,7 +201,7 @@ class FloatingChat:
 
     def _start_capture(self):
         if self.sending or self.capture.active:
-            return              # 正在等回答 / 框选层已经开着 → 忽略这次热键
+            return              # waiting on an answer / selector already open -> ignore
         try:
             self.capture.open()
         except Exception as ex:
@@ -201,28 +209,31 @@ class FloatingChat:
         self._sync_esc()
 
     def _on_region_selected(self, shot):
-        self.pending_shot = shot        # 交给下一次 send() 消费
+        self.pending_shot = shot        # handed to the next send()
         self._append_block(
             f"📷 Selected {shot['w']}x{shot['h']} — type your question, "
             f"then press Enter  (Esc cancels)\n", "shot")
-        self._raise_chat_window()       # 阶段2：抬窗 + 抢键盘焦点
+        self._raise_chat_window()       # stage 2: raise the window + take focus
 
     def _on_capture_cancel(self):
         self.pending_shot = None
         self._sync_esc()
 
     def cancel_capture(self):
-        """幂等：全局监听和窗口绑定可能对同一次 Esc 各触发一次"""
+        """Idempotent: the global listener and the widget binding can each fire
+        once for the same Esc"""
         self.pending_shot = None
         if self.capture.active:
             self.capture.cancel()
         self._sync_esc()
 
     def _sync_esc(self):
-        """框选层开着时把窗口的 Esc 解绑，让全局监听独占 Esc。
+        """While the selector is open, unbind the window's Esc so the global
+        listener owns it exclusively.
 
-        否则同一次按键会被两条路径各处理一次：全局监听先关掉框选层，
-        紧接着 Tk 绑定看到「没有截图在进行」，就把整个程序退掉了。
+        Otherwise a single keypress is handled twice: the global listener closes
+        the selector, and then the Tk binding sees "no capture in progress" and
+        quits the whole program.
         """
         want = not self.capture.active
         if want == self._esc_bound:
@@ -234,20 +245,21 @@ class FloatingChat:
             self.root.unbind("<Escape>")
 
     def _on_escape_key(self, event):
-        """只有没有截图在进行时才会走到这里（框选期间 Esc 是解绑的）"""
+        """Only reachable when no capture is in progress (Esc is unbound during one)"""
         self._quit()
 
     def _raise_chat_window(self):
-        """阶段2：把悬浮窗抬到框选层之上，并且抢到键盘焦点。
+        """Stage 2: raise the floating window above the selector and take keyboard focus.
 
-        只 lift() 只解决 Z 序 —— overrideredirect 窗口的键盘焦点得靠
-        SetForegroundWindow 争，这依赖启动时调过的 _allow_foreground()。
+        lift() alone only fixes the Z-order — an overrideredirect window has to
+        fight for keyboard focus via SetForegroundWindow, which relies on
+        _allow_foreground() having been called at startup.
         """
         try:
             self.root.deiconify()
-            self.root.attributes("-topmost", False)   # 先摘掉才抬得动
+            self.root.attributes("-topmost", False)   # must drop it to be raised
             self.root.lift()
-            self.root.attributes("-topmost", True)    # 再钉回去
+            self.root.attributes("-topmost", True)    # nail it back on
             ctypes.windll.user32.SetForegroundWindow(self.root.winfo_id())
         except Exception:
             pass
@@ -263,12 +275,12 @@ class FloatingChat:
                 pass
         self.root.destroy()
 
-    # ---------- 背景自定义 ----------
+    # ---------- background customisation ----------
     def toggle_settings(self):
         if self.settings.winfo_manager():
-            self.settings.pack_forget()                 # 收起
+            self.settings.pack_forget()                 # collapse
         else:
-            self.settings.pack(fill="x", before=self.chat)  # 展开在聊天区上方
+            self.settings.pack(fill="x", before=self.chat)  # expand above the transcript
 
     def set_bg(self, color):
         self.cfg["bg"] = color
@@ -281,9 +293,10 @@ class FloatingChat:
         self.root.attributes("-alpha", self.cfg["opacity"])
         save_config(self.cfg)
 
-    # ---------- 聊天 ----------
+    # ---------- chat ----------
     def send(self, event=None):
-        """Enter 或点发送。有待发截图就一起带上，没有就走普通对话。"""
+        """Enter, or the Send button. Attaches a pending screenshot if there is one,
+        otherwise it's a plain conversation turn."""
         if self.sending:
             return "break"
         text = self.input.get("1.0", "end").strip()
@@ -291,15 +304,15 @@ class FloatingChat:
             return "break"
 
         shot = self.pending_shot
-        self.pending_shot = None       # 图只发一次，不管成败
+        self.pending_shot = None       # a screenshot is sent once, success or not
         self.input.delete("1.0", "end")
 
         if shot is not None:
             self._append_block(
                 f"🙂 You: [screenshot {shot['w']}x{shot['h']}] {text}\n", "user")
-            self.capture.close()       # 发出去了 = 阶段2结束，覆盖层消失
+            self.capture.close()       # sent = stage 2 over, the overlay goes away
         else:
-            if self.capture.active:    # 开着框选层却在打纯文字 → 放弃那个框
+            if self.capture.active:    # plain text while selecting -> drop the box
                 self.capture.close()
             self._append_block(f"🙂 You: {text}\n", "user")
         self._sync_esc()
@@ -307,10 +320,10 @@ class FloatingChat:
         self._append_block("🤖 Claude: ", "bot")
         self.sending = True
         self.send_btn.config(state="disabled", text="Waiting…")
-        # 把异步任务提交给后台线程的事件循环，绝不阻塞界面
+        # Hand the async task to the background thread's event loop; never block the UI
         coro = self._run_vision(text, shot) if shot else self._run(text)
         asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return "break"   # 阻止 Enter 在输入框里插入换行
+        return "break"   # stop Enter from inserting a newline in the input box
 
     def _append_block(self, s, tag):
         self.chat.config(state="normal")
@@ -319,10 +332,10 @@ class FloatingChat:
         self.chat.see("end")
 
     async def _run(self, prompt):
-        """在后台线程的事件循环里执行：逐段接收回答"""
+        """Runs on the background thread's event loop: receive the answer in pieces"""
         try:
             async for delta in self.session.ask_stream(prompt):
-                # tkinter 的 after 可以跨线程安全地调度UI更新
+                # tkinter's after() schedules a UI update safely across threads
                 self.root.after(0, self._append, delta)
         except Exception as ex:
             self.root.after(0, self._append_block, f"\n⚠️ Error: {ex}\n", "err")
@@ -336,7 +349,7 @@ class FloatingChat:
         self.chat.see("end")
 
     async def _run_vision(self, prompt, shot):
-        """截图提问：结构和 _run 一样，只是换成带图的一次性通道（vision.py）"""
+        """Screenshot question: same shape as _run, but via the image channel (vision.py)"""
         try:
             async for delta in self.vision.ask_stream(
                     prompt, shot["b64"], shot["media_type"]):

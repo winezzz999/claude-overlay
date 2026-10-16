@@ -1,13 +1,15 @@
-"""agent.py — 与 Claude Code 通信的封装（流式返回）"""
+"""agent.py — talking to Claude Code (streaming responses)"""
 import json
 import os
 from claude_agent_sdk import query, ClaudeAgentOptions
 
 
 def _load_env():
-    """读取 Claude Code 自身的配置（API地址/模型/令牌），
-    让副屏助手和你在 VS Code 插件里用的 Claude 走同一套登录与模型。
-    令牌只存在于 settings.json 里，这里运行时读一下，绝不写进代码。"""
+    """Read Claude Code's own configuration (API endpoint / model / token) so the
+    overlay uses the same login and model as the Claude you use in your editor.
+
+    The token only ever lives in settings.json — it is read at runtime here and
+    never written into the source."""
     p = os.path.expanduser("~/.claude/settings.json")
     try:
         return dict(json.load(open(p, encoding="utf-8")).get("env") or {})
@@ -16,34 +18,38 @@ def _load_env():
 
 
 class ClaudeSession:
-    """一个可持续对话的 Claude 会话。
+    """A Claude session that keeps its context across turns.
 
-    用法：
+    Usage:
         session = ClaudeSession(cwd="...")
-        async for delta in session.ask_stream("你好"):
-            ...把 delta 追加显示到界面...
-    同一个 session 多次调用 ask_stream 会保持上下文（记得之前聊过什么）。
+        async for delta in session.ask_stream("hello"):
+            ...append delta to the UI...
+
+    Calling ask_stream repeatedly on the same session preserves context, so it
+    remembers what you talked about before.
     """
 
     def __init__(self, cwd):
         self._base = dict(
             cwd=cwd,
             env=_load_env(),
-            include_partial_messages=True,   # 开启流式：能收到逐字更新的增量
+            include_partial_messages=True,   # streaming: receive per-token deltas
         )
-        self.session_id = None   # 首次为 None（新会话），之后用 resume 续接
+        self.session_id = None   # None on the first call (new session); then resume
 
     async def ask_stream(self, prompt):
-        """发送一条消息，逐段产出回答文本（生成器，一次 yield 一小段）。"""
+        """Send one message and yield the answer in pieces (a generator)."""
         options = ClaudeAgentOptions(resume=self.session_id, **self._base)
         async for msg in query(prompt=prompt, options=options):
             name = type(msg).__name__
             if name == "ResultMessage":
-                # 回答结束：记住会话ID，下次问话时续接这个会话
+                # Answer finished: remember the session id so the next question
+                # continues this same conversation
                 self.session_id = msg.session_id
                 return
             if name == "StreamEvent":
-                # 流式事件：只取"文字增量"，忽略思考过程等其他事件
+                # Streaming event: take only the text deltas, ignore thinking
+                # and the other event kinds
                 ev = msg.event or {}
                 if ev.get("type") == "content_block_delta":
                     d = ev.get("delta") or {}

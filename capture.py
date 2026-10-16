@@ -1,19 +1,25 @@
-"""capture.py — 全屏框选层：整屏变暗 + 选区亮洞
+"""capture.py — full-screen region selector: dim the screen, keep the selection bright
 
-从 skills/capture.py（mss 版原型）移植并重写，两者不共用代码。
+Ported and rewritten from skills/capture.py (the mss-based prototype); the two
+do not share code.
 
-和原型的三点不同：
-  1. **先截图、后弹窗**：图在框选层出现之前就拍好了，所以框选层自己、
-     红框、尺寸数字永远不会被拍进发给模型的图里 —— 原型里那句
-     time.sleep(0.05) 就是为这个打的补丁，这里从根上不需要了
-  2. **不用 -alpha 做变暗**：-alpha 作用于整个窗口，选区会跟着一起暗。
-     这里是「预先调暗的整屏截图当底图 + 同一张图的原图裁剪当亮洞」
-  3. **分辨率分离**：物理像素(2560x1600)发给模型保证清晰，Tk 坐标
-     (2048x1280)给画布显示，比例运行时算 = 截图宽 / Tk屏宽
+Three differences from the prototype:
+  1. **Screenshot first, window second.** The image is taken before the selector
+     appears, so the selector itself, the outline and the size label can never
+     end up in the image that gets sent to the model — the prototype's
+     `time.sleep(0.05)` was a patch for exactly that, and is no longer needed.
+  2. **No `-alpha` for the dimming.** `-alpha` applies to the whole window, so
+     the selection would dim along with everything else. Instead: a pre-darkened
+     copy of the screenshot as the background, with the *original* pixels
+     pasted back in as the selection.
+  3. **Two resolutions.** Physical pixels (2560x1600) go to the model so the
+     image stays sharp; Tk coordinates (2048x1280) go to the canvas for display.
+     The ratio is computed at runtime as `screenshot width / tk screen width`.
 
-⚠️ 不要照搬 skills/capture.py 里的 enable_dpi_awareness()。
-那个函数会让 Tk 报物理坐标、比例变成 1.0，整个悬浮窗的字号和窗口尺寸
-都会跟着变。这里靠运行时算比例来兜，不用动进程的 DPI 感知。
+WARNING: do not copy `enable_dpi_awareness()` over from skills/capture.py.
+That makes Tk report physical coordinates and the ratio become 1.0, which
+changes the font size and dimensions of the whole floating window. The runtime
+ratio below covers it without touching the process's DPI awareness.
 """
 import base64
 import io
@@ -22,51 +28,54 @@ import tkinter as tk
 
 from PIL import Image, ImageEnhance, ImageGrab, ImageTk
 
-# 全局热键：反引号键（数字 1 左边那个，中文输入法下打出 ·）。
+# Global hotkey: the backtick key (left of the 1, which types · under a Chinese IME).
 #
-# ⚠️ 这里踩过两个坑，改热键时别再踩：
-#  1. 不能写 vk 编号 "<192>"。pynput 比对前会先做一次 canonical 规范化，
-#     只要按键带字符就把 vk 丢掉、只留字符，于是 from_vk(192)（无字符）
-#     永远比不中 —— 表现就是「按了没反应」。
-#  2. 不能写 "·"。那是输入法在上层加工出来的，pynput 在底层拿到的是反引号 `，
-#     字符对不上。
-# 所以：老老实实写底层能看到的那个字符。
+# WARNING: two traps here, both hit for real — don't repeat them.
+#  1. Do NOT write the vk number "<192>". Before comparing a hotkey, pynput runs
+#     a `canonical` normalisation that DROPS the vk whenever the key carries a
+#     character, keeping only the character. So `from_vk(192)` (no character)
+#     never matches — the symptom is "the hotkey just doesn't fire".
+#  2. Do NOT write "·" either. That character is produced by the IME at a higher
+#     layer; at the low level pynput sees a backtick, so the characters differ.
+# Conclusion: write the character the low level actually sees.
 HOTKEY = "`"
-MIN_SIZE = 5                   # 小于 5 像素的框当作误触
-DARK = 0.35                    # 变暗程度：1=原图，0=全黑
-REPAINT_MS = 30                # 拖动时重画亮洞的最小间隔（约 33 帧/秒）
-MAX_PNG_BYTES = 4_000_000      # 超过就先缩小再编码，避免请求体过大被通道拒
-HIDE_ROOT_ON_GRAB = False      # 抓屏前要不要把悬浮窗藏起来（藏约 60 毫秒，抓完立刻恢复）
-                               # True  = 截图里绝不会有悬浮窗，代价是会闪一下
-                               # False = 悬浮窗不闪，但框选区如果盖住它，它会被拍进图里
+MIN_SIZE = 5                   # boxes smaller than 5px count as a mis-click
+DARK = 0.35                    # dimming: 1 = original, 0 = fully black
+REPAINT_MS = 30                # min interval between hole repaints (~33 fps)
+MAX_PNG_BYTES = 4_000_000      # above this, shrink before encoding
+HIDE_ROOT_ON_GRAB = False      # hide the floating window while grabbing (~60ms)?
+                               # True  = never in the screenshot, at the cost of a flicker
+                               # False = no flicker, but a selection covering it
+                               #         will capture the window itself
 
 
 class CaptureOverlay:
-    """框选层。零业务逻辑，只通过 on_selected / on_cancel 两个回调对外说话。
+    """The selector. No business logic — it only talks through two callbacks.
 
-    状态：idle → armed → dragging → selected，任意状态都能 cancel() 回 idle。
+    States: idle -> armed -> dragging -> selected. cancel() works from any state.
     """
 
     def __init__(self, root, on_selected=None, on_cancel=None):
         self.root = root
-        self.on_selected = on_selected     # 回调：收到 {b64, media_type, w, h, ...}
-        self.on_cancel = on_cancel         # 回调：用户取消（Esc / 右键）
-        self.overlay = None                # Toplevel；None = 没开
+        self.on_selected = on_selected     # callback: receives {b64, media_type, w, h, ...}
+        self.on_cancel = on_cancel         # callback: user cancelled (Esc / right-click)
+        self.overlay = None                # Toplevel; None = not open
         self.canvas = None
         self.state = "idle"
 
         self.vx = self.vy = 0
         self.scale = 1.0
-        self.shot_full = None              # Pillow Image：物理分辨率整屏（发送用）
-        self.shot_disp = None              # Pillow Image：Tk 坐标分辨率整屏（显示用）
+        self.shot_full = None              # Pillow Image: physical res (to send)
+        self.shot_disp = None              # Pillow Image: Tk res (to display)
 
-        # 这两个引用必须一直拿着！PhotoImage 被垃圾回收后画布上会变空白
+        # These two references must be held! A garbage-collected PhotoImage
+        # renders as blank on the canvas.
         self._base_photo = None
         self._hole_photo = None
 
         self._hole = self._rect = self._label = None
-        self._box = None                   # 当前框（画布坐标）
-        self._prev_box = None              # 误触时用来还原上一个框
+        self._box = None                   # current box (canvas coordinates)
+        self._prev_box = None              # to restore after a mis-click
         self._origin = None
         self._repaint_job = None
 
@@ -74,26 +83,27 @@ class CaptureOverlay:
     def active(self):
         return self.overlay is not None
 
-    # ---------- 开关 ----------
+    # ---------- open / close ----------
 
     def open(self):
-        """截图并弹出框选层。已经开着就忽略。"""
+        """Grab the screen and show the selector. No-op if already open."""
         if self.active:
             return
 
-        # ① 先截图。悬浮窗是置顶半透明的，不藏起来就会出现在截图里
+        # (1) Screenshot first. The floating window is topmost and translucent,
+        #     so it would show up in the capture unless hidden.
         was_visible = False
         if HIDE_ROOT_ON_GRAB:
             try:
                 was_visible = self.root.state() == "normal"
                 if was_visible:
                     self.root.withdraw()
-                    self.root.update()      # 让 Tk 把隐藏指令真的发出去
-                    time.sleep(0.06)        # 等桌面合成器擦掉它，否则可能残留
+                    self.root.update()      # let Tk actually send the hide
+                    time.sleep(0.06)        # let the compositor erase it
             except tk.TclError:
                 was_visible = False
         try:
-            full = ImageGrab.grab(all_screens=True)     # 物理像素，如 2560x1600
+            full = ImageGrab.grab(all_screens=True)     # physical, e.g. 2560x1600
         finally:
             if was_visible:
                 self.root.deiconify()
@@ -102,7 +112,7 @@ class CaptureOverlay:
 
         vx, vy = self.root.winfo_vrootx(), self.root.winfo_vrooty()
         vw, vh = self.root.winfo_vrootwidth(), self.root.winfo_vrootheight()
-        self.scale = full.width / vw        # 运行时算，别写死 1.25
+        self.scale = full.width / vw        # computed at runtime, never hardcoded
         disp = (full.resize((vw, vh), Image.LANCZOS)
                 if (full.width, full.height) != (vw, vh) else full.copy())
         dark = ImageEnhance.Brightness(disp).enhance(DARK)
@@ -110,7 +120,7 @@ class CaptureOverlay:
         self.shot_full, self.shot_disp = full, disp
         self.vx, self.vy = vx, vy
 
-        # ② 弹窗。注意：不设 -alpha！
+        # (2) The window. Note: no -alpha!
         ov = tk.Toplevel(self.root)
         ov.overrideredirect(True)
         ov.geometry(f"{vw}x{vh}+{vx}+{vy}")
@@ -119,7 +129,8 @@ class CaptureOverlay:
         cv.pack(fill="both", expand=True)
         self.overlay, self.canvas = ov, cv
 
-        # ③ 叠放顺序就是创建顺序，之后只改内容不重建，Z 序自然不乱
+        # (3) Stacking order is creation order. Afterwards we only change the
+        #     contents of these items, never rebuild them, so the order holds.
         self._base_photo = ImageTk.PhotoImage(dark)
         cv.create_image(0, 0, anchor="nw", image=self._base_photo)
         self._hole = cv.create_image(0, 0, anchor="nw", state="hidden")
@@ -131,27 +142,28 @@ class CaptureOverlay:
         cv.create_text(vw // 2, 34, text="Drag to select  ·  Esc to cancel",
                        fill="#e8e8e8", font=("Microsoft YaHei", 12))
 
-        # ④ 事件
+        # (4) Events
         cv.bind("<ButtonPress-1>", self._on_press)
         cv.bind("<B1-Motion>", self._on_drag)
         cv.bind("<ButtonRelease-1>", self._on_release)
-        cv.bind("<Button-3>", lambda e: self.cancel())      # 右键 = 取消
+        cv.bind("<Button-3>", lambda e: self.cancel())      # right-click cancels
 
-        # ⑤ 抢鼠标。必须等窗口可见，否则 TclError: grab failed: window not viewable
+        # (5) Grab the mouse. Must wait until the window is viewable, otherwise
+        #     TclError: grab failed: window not viewable
         ov.update_idletasks()
         self._take_grab()
-        ov.focus_force()        # 尽力而为；Esc 不指望这里，靠全局监听
+        ov.focus_force()        # best effort; Esc does NOT rely on this
         self.state = "armed"
 
     def cancel(self):
-        """Esc / 右键：关掉框选层，并通知主人清掉待发图。"""
+        """Esc / right-click: close the selector and tell the owner to drop the image."""
         was_open = self.active
         self.close()
         if was_open and self.on_cancel:
             self.on_cancel()
 
     def close(self):
-        """只关窗，不触发 on_cancel（发出去之后走这个）。"""
+        """Just close the window. Does NOT fire on_cancel (the send path uses this)."""
         if self._repaint_job is not None and self.overlay is not None:
             try:
                 self.overlay.after_cancel(self._repaint_job)
@@ -165,7 +177,7 @@ class CaptureOverlay:
             except tk.TclError:
                 pass
         self.overlay = self.canvas = None
-        # 放掉约 30MB 的位图
+        # release ~30MB of bitmaps
         self._base_photo = self._hole_photo = None
         self.shot_full = self.shot_disp = None
         self._box = self._prev_box = self._origin = None
@@ -177,7 +189,7 @@ class CaptureOverlay:
         try:
             self.overlay.grab_set()
         except tk.TclError:
-            pass                # 窗口还没 map 好；隐式抓仍能覆盖本次拖拽
+            pass                # not mapped yet; the implicit grab still covers this drag
 
     def _release_grab(self):
         if self.overlay is None:
@@ -185,14 +197,15 @@ class CaptureOverlay:
         try:
             self.overlay.grab_release()
         except tk.TclError:
-            pass                # 本来就没抓着
+            pass                # nothing was grabbed
 
-    # ---------- 鼠标 ----------
+    # ---------- mouse ----------
 
     def _on_press(self, e):
         if self.overlay is None:
             return
-        # 松手后抓是放开的（为了悬浮窗能点/能打字），重新画框时再抢回来
+        # The grab is released after a selection (so the floating window can be
+        # clicked and typed into); take it back when drawing a new box.
         if self.overlay.grab_current() is None:
             self._take_grab()
         self._origin = (e.x, e.y)
@@ -211,13 +224,14 @@ class CaptureOverlay:
     def _on_release(self, e):
         if self._origin is None:
             return
-        self._on_drag(e)                    # 用最后位置定框
+        self._on_drag(e)                    # settle the box at the final position
         box, self._origin = self._box, None
         w = box[2] - box[0] if box else 0
         h = box[3] - box[1] if box else 0
 
         if w < MIN_SIZE or h < MIN_SIZE:
-            # 误触：不关窗、不丢旧框（Esc 才是唯一出口）
+            # Mis-click: don't close, don't lose the previous box (Esc is the
+            # only way out)
             self._box = self._prev_box
             if self._box:
                 self._paint_now()
@@ -225,19 +239,20 @@ class CaptureOverlay:
                 self._release_grab()
             else:
                 self._hide_hole()
-                self.state = "armed"        # 抓还在，继续等
+                self.state = "armed"        # grab still held; keep waiting
             return
 
-        self._paint_now()                   # 先把最终画面画出来，立刻有反馈
+        self._paint_now()                   # draw the final frame first: instant feedback
         self.state = "selected"
-        self._release_grab()                # 放开鼠标，悬浮窗才能点、才能打字
+        self._release_grab()                # let go so the floating window can be used
         if self.on_selected:
             self.on_selected(self._build_shot(box))
 
-    # ---------- 画亮洞 ----------
+    # ---------- drawing the bright hole ----------
 
     def _schedule_repaint(self):
-        """脏标记 + 单次 after：鼠标每秒能报 100+ 次，全画一遍会雪崩。"""
+        """Dirty flag + a single `after`: the mouse can report 100+ times a second,
+        and repainting every time would avalanche."""
         if self._repaint_job is None and self.overlay is not None:
             self._repaint_job = self.overlay.after(REPAINT_MS, self._paint_now)
 
@@ -247,15 +262,16 @@ class CaptureOverlay:
             return
         x0, y0, x1, y1 = self._box
         if x1 - x0 < 1 or y1 - y0 < 1:
-            self._hide_hole()               # 0 尺寸的图 Tk 画不出来
+            self._hide_hole()               # Tk cannot draw a zero-sized image
             return
 
-        # 显示用的裁剪走 Tk 坐标，在已经缩放好的 shot_disp 上裁
+        # Display crop uses Tk coordinates, cut from the already-resized shot_disp
         photo = ImageTk.PhotoImage(self.shot_disp.crop((x0, y0, x1, y1)))
         self.canvas.coords(self._hole, x0, y0)
         self.canvas.itemconfig(self._hole, image=photo, state="normal")
-        # 顺序要紧：先让画布换上新图，再放掉旧图的引用。
-        # 反过来写会让画布短暂指向一个已经销毁的 Tk image，闪白
+        # Order matters: point the canvas at the new image BEFORE dropping the old
+        # reference. The other way round briefly points the canvas at a destroyed
+        # Tk image, which flashes white.
         self._hole_photo = photo
 
         self.canvas.coords(self._rect, x0, y0, x1, y1)
@@ -272,22 +288,23 @@ class CaptureOverlay:
         for item in (self._hole, self._rect, self._label):
             self.canvas.itemconfig(item, state="hidden")
 
-    # ---------- 坐标换算 + 编码 ----------
+    # ---------- coordinate conversion + encoding ----------
 
     def _to_physical(self, box):
-        """画布坐标 → 物理像素。整份代码里唯一一处 ×scale。"""
+        """Canvas coordinates -> physical pixels. The only place that multiplies
+        by `scale` in this file."""
         x0, y0, x1, y1 = box
         s, vx, vy = self.scale, self.vx, self.vy
         return (round((vx + x0) * s), round((vy + y0) * s),
                 round((vx + x1) * s), round((vy + y1) * s))
 
     def _build_shot(self, box):
-        """松手时同步编码好，send() 里就只剩发送了。"""
+        """Encoded synchronously on release, so send() only has to send."""
         pbox = self._to_physical(box)
-        crop = self.shot_full.crop(pbox)    # 发送用物理原图，不是缩放版
+        crop = self.shot_full.crop(pbox)    # physical original, not the resized copy
         buf = io.BytesIO()
         crop.save(buf, "PNG")
-        if buf.tell() > MAX_PNG_BYTES:      # 软保护：太大先缩再编码
+        if buf.tell() > MAX_PNG_BYTES:      # soft guard: shrink before encoding
             k = (MAX_PNG_BYTES / buf.tell()) ** 0.5
             crop = crop.resize((max(1, int(crop.width * k)),
                                 max(1, int(crop.height * k))), Image.LANCZOS)
