@@ -22,7 +22,8 @@ import tkinter as tk
 
 from PIL import Image, ImageEnhance, ImageGrab, ImageTk
 
-HOTKEY = "<ctrl>+<alt>+s"      # 全局热键，沿用原型
+HOTKEY = "<f1>"                # 全局热键。注意 F1 同时是系统的"帮助"键，
+                               # pynput 不吞按键，前台程序可能也会响应
 MIN_SIZE = 5                   # 小于 5 像素的框当作误触
 DARK = 0.35                    # 变暗程度：1=原图，0=全黑
 REPAINT_MS = 30                # 拖动时重画亮洞的最小间隔（约 33 帧/秒）
