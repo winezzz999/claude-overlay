@@ -1,4 +1,7 @@
-"""临时测试：验证 claude-agent-sdk 的登录状态和流式API（v3）"""
+"""快速测试：验证 claude-agent-sdk 的登录状态和流式 API
+
+运行：python test_sdk.py
+"""
 import asyncio
 import json
 import os
@@ -18,18 +21,18 @@ def describe_ev(ev):
         if it == "content_block_delta":
             d = inner.get("delta", {})
             if d.get("type") == "text_delta":
-                return f"增量: {d.get('text','')!r}"
+                return f"text_delta: {d.get('text','')!r}"
             return f"delta[{d.get('type')}]"
         return f"stream[{it}]"
     if t == "assistant":
-        return f"assistant消息: {str(ev.get('message', {}).get('content'))[:80]}"
-    return f"事件[{t}]"
+        return f"assistant: {str(ev.get('message', {}).get('content'))[:80]}"
+    return f"event[{t}]"
 
 
 async def main():
-    print("开始SDK测试...")
+    print("starting SDK test ...")
     async for m in query(
-        prompt="只回复两个字：你好",
+        prompt="Reply with exactly two words: hello there",
         options=ClaudeAgentOptions(env=env, include_partial_messages=True),
     ):
         name = type(m).__name__
@@ -42,11 +45,11 @@ async def main():
         elif name == "StreamEvent":
             print(describe_ev(m.event or {}))
         elif name == "ResultMessage":
-            print(f"最终结果: {str(m.result)[:100]}")
+            print(f"final: {str(m.result)[:100]}")
             print(f"session_id: {m.session_id}")
         else:
             print(f"{name}: {str(m)[:100]}")
-    print("测试结束")
+    print("done")
 
 
 asyncio.run(main())

@@ -128,7 +128,7 @@ class CaptureOverlay:
         self._label = cv.create_text(0, 0, text="", fill="#ffd479",
                                      font=("Microsoft YaHei", 11, "bold"),
                                      state="hidden")
-        cv.create_text(vw // 2, 34, text="拖拽选择区域　·　Esc 取消",
+        cv.create_text(vw // 2, 34, text="Drag to select  ·  Esc to cancel",
                        fill="#e8e8e8", font=("Microsoft YaHei", 12))
 
         # ④ 事件
