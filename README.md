@@ -65,8 +65,11 @@ Just type. This goes through a persistent Claude session, so it keeps context ac
 
 ### Conversations
 
-- **`+`** in the title bar archives the current conversation and starts a blank one
-- **`≡`** opens the history list — click one to switch back to it, or delete it
+Conversations appear as tabs under the title bar, like a browser:
+
+- **Click a tab** to switch — each conversation keeps its own Claude context
+- **`✕` on a tab** closes it (with confirmation)
+- **`+`** starts a new conversation
 - Closing the app keeps everything: next launch restores the last conversation, and Claude picks up where it left off
 
 History lives in `history.json` next to the code (never pushed to the repository). Titles are derived automatically from the first question of each conversation.

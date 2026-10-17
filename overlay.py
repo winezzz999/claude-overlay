@@ -89,7 +89,6 @@ class FloatingChat:
         # --- conversation history (survives restarts) ---
         self.history = History()
         self._reply_block = None    # the bot block a streamed answer is filling in
-        self._history_order = []    # conversations in the order shown in the list
 
         # The asyncio loop runs on a background thread: streamed answers from the
         # SDK must not block the UI
@@ -98,6 +97,7 @@ class FloatingChat:
 
         self._build_ui()
         self._restore_conversation()
+        self._refresh_tabs()        # populate the tab strip with what we restored
         self._start_hotkeys()
         self.root.after(30, self._drain_events)   # drain signals from the pynput thread
         self.root.mainloop()
@@ -116,10 +116,6 @@ class FloatingChat:
                   command=self._quit).pack(side="right", padx=8)
         tk.Button(title, text="⚙", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
                   command=self.toggle_settings).pack(side="right", padx=2)
-        tk.Button(title, text="≡", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
-                  command=self._toggle_history).pack(side="right", padx=2)
-        tk.Button(title, text="+", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
-                  command=self._new_chat).pack(side="right", padx=2)
         for w in (title, label) + tuple(title.winfo_children()):
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
@@ -145,21 +141,24 @@ class FloatingChat:
         self.opacity_scale.set(self.cfg["opacity"])
         self.opacity_scale.pack(fill="x")
 
-        # History panel (collapsed by default)
-        self.history_panel = tk.Frame(self.root, bg=self.cfg["bg"])
-        self._paint.append(self.history_panel)
-        self.history_list = tk.Listbox(
-            self.history_panel, height=7, bg="#2a2a2a", fg=fg, bd=0,
-            highlightthickness=0, font=FONT, activestyle="none",
-            selectbackground="#3d7eff", selectforeground="#ffffff")
-        self.history_list.pack(fill="x", padx=8, pady=(6, 2))
-        hrow = tk.Frame(self.history_panel, bg=self.cfg["bg"])
-        self._paint.append(hrow)
-        hrow.pack(fill="x", padx=8, pady=(0, 6))
-        tk.Button(hrow, text="Open", bg="#3d7eff", fg="white", bd=0, font=FONT,
-                  command=self._open_selected).pack(side="left", padx=(0, 4))
-        tk.Button(hrow, text="Delete", bg="#5a2e2e", fg="#ffb0b0", bd=0,
-                  font=FONT, command=self._delete_selected).pack(side="left")
+        # Conversation tabs, browser-style: one tab per conversation, the
+        # pinned + at the end starts a new one. Tabs live in a scrollable
+        # canvas so twenty of them don't overflow the window.
+        self.tab_holder = tk.Frame(self.root, bg="#2c2c2c")
+        self._paint.append(self.tab_holder)
+        self.tab_canvas = tk.Canvas(self.tab_holder, height=30, bg="#2c2c2c",
+                                    highlightthickness=0, bd=0)
+        self.tab_canvas.pack(side="left", fill="x", expand=True)
+        self.tab_frame = tk.Frame(self.tab_canvas, bg="#2c2c2c")
+        self.tab_window = self.tab_canvas.create_window(
+            (0, 0), window=self.tab_frame, anchor="nw")
+        self.tab_frame.bind("<Configure>", lambda e: self.tab_canvas.configure(
+            scrollregion=self.tab_canvas.bbox("all")))
+        self.tab_canvas.bind("<MouseWheel>", self._tab_scroll)  # wheel scrolls tabs
+        tk.Button(self.tab_holder, text="+", bg="#2c2c2c", fg=fg, bd=0,
+                  font=FONT, cursor="hand2",
+                  command=self._new_chat).pack(side="left", padx=4)
+        self.tab_holder.pack(fill="x")
 
         # Transcript: Text widget tags stand in for bubbles (you = blue, Claude = grey)
         self.chat = tk.Text(self.root, bg=self.cfg["bg"], fg=fg, wrap="word",
@@ -334,59 +333,80 @@ class FloatingChat:
             self.capture.close()
         self._sync_esc()
         self._replay({"messages": []})
-        self._hide_history()
+        self._refresh_tabs()
 
-    def _toggle_history(self):
-        if self.history_panel.winfo_manager():
-            self.history_panel.pack_forget()
-        else:
-            self._fill_history()
-            self.history_panel.pack(fill="x", before=self.chat)
+    def _tab_scroll(self, event):
+        """Mouse wheel over the tab strip scrolls it horizontally."""
+        self.tab_canvas.xview_scroll(-1 * int(event.delta / 120), "units")
 
-    def _hide_history(self):
-        if self.history_panel.winfo_manager():
-            self.history_panel.pack_forget()
-
-    def _fill_history(self):
-        self.history_list.delete(0, "end")
-        self._history_order = self.history.conversations()
+    def _refresh_tabs(self):
+        """Rebuild the tab strip to mirror the conversation list."""
+        for w in self.tab_frame.winfo_children():
+            w.destroy()
         current = self.history.current()
-        for c in self._history_order:
-            title = c.get("title") or "(empty)"
-            mark = "● " if current and c["id"] == current["id"] else "   "
-            self.history_list.insert(
-                "end", f"{mark}{c.get('updated', '')[:16]}  {title}")
+        cid = current["id"] if current else None
+        # oldest first, newest ends up next to the + button (browser order)
+        for conv in reversed(self.history.conversations()):
+            self._make_tab(conv, conv["id"] == cid)
 
-    def _selected_conv(self):
-        sel = self.history_list.curselection()
-        return self._history_order[sel[0]] if sel else None
+    def _make_tab(self, conv, is_current):
+        bg = "#3d7eff" if is_current else "#2e2e2e"
+        fg = "#ffffff" if is_current else "#e8e8e8"
+        tab = tk.Frame(self.tab_frame, bg=bg)
+        label = tk.Label(tab, text=(conv.get("title") or "(empty)")[:16],
+                         bg=bg, fg=fg, font=("Microsoft YaHei", 9))
+        label.pack(side="left", padx=(8, 2), pady=3)
+        tk.Button(tab, text="✕", bg=bg, fg=fg, bd=0, relief="flat",
+                  font=("Microsoft YaHei", 8), cursor="hand2",
+                  activebackground=bg, activeforeground=fg,
+                  command=lambda c=conv["id"]: self._close_tab(c)
+                  ).pack(side="left", padx=(0, 6), pady=3)
+        for w in (tab, label):          # clicking the ✕ must NOT switch
+            w.bind("<Button-1>", lambda e, c=conv["id"]: self._open_tab(c))
+            w.configure(cursor="hand2")
+        tab.pack(side="left", padx=(3, 0), pady=3)
 
-    def _open_selected(self):
-        conv = self._selected_conv()
-        if conv is None or self.sending:
+    def _open_tab(self, cid):
+        """Switch to another conversation."""
+        current = self.history.current()
+        if self.sending or (current and current["id"] == cid):
             return
         self.history.save()
-        self.history.select(conv["id"])
-        self.session.session_id = conv.get("session_id")
+        opened = self.history.select(cid)
+        if opened is None:
+            return
+        self.session.session_id = opened.get("session_id")
         self._reply_block = None
-        self._replay(conv)
-        self._hide_history()
+        self.pending_shot = None
+        if self.capture.active:
+            self.capture.close()
+        self._sync_esc()
+        self._replay(opened)
+        self._refresh_tabs()
 
-    def _delete_selected(self):
-        conv = self._selected_conv()
-        if conv is None or self.sending:
+    def _close_tab(self, cid):
+        """Close (delete) a conversation, with confirmation."""
+        if self.sending:
+            return
+        conv = next((c for c in self.history.conversations() if c["id"] == cid), None)
+        if conv is None:
             return
         name = conv.get("title") or "(empty)"
         if not messagebox.askyesno(
-                "Delete conversation",
-                f"Delete “{name}”?\n\nThis cannot be undone.",
+                "Close conversation",
+                f"Close “{name}”?\n\nThe transcript is deleted and cannot be undone.",
                 parent=self.root):
             return
-        self.history.delete(conv["id"])
+        was_current = self.history.current() is not None \
+            and self.history.current()["id"] == cid
+        # if it was the current one, delete() starts a fresh conversation
+        self.history.delete(cid)
         self.session.session_id = (self.history.current() or {}).get("session_id")
         self._reply_block = None
-        self._replay(self.history.current() or {"messages": []})
-        self._fill_history()
+        if was_current:
+            self.pending_shot = None
+            self._replay(self.history.current() or {"messages": []})
+        self._refresh_tabs()
 
     # ---------- background customisation ----------
     def toggle_settings(self):
@@ -492,6 +512,7 @@ class FloatingChat:
         # Remember Claude's session id so a restart can carry on where it left off
         self.history.set_session(self.session.session_id)
         self.history.save()
+        self._refresh_tabs()        # the title may have just been derived
 
 
 if __name__ == "__main__":
