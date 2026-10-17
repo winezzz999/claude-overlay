@@ -18,11 +18,13 @@ import queue
 import threading
 import tkinter as tk
 from pathlib import Path
+from tkinter import messagebox
 
 from pynput import keyboard
 
 from agent import ClaudeSession
 from capture import HOTKEY, CaptureOverlay
+from history import History
 from vision import VisionSession
 
 
@@ -84,12 +86,18 @@ class FloatingChat:
         self._events = queue.Queue()     # pynput thread -> Tk thread
         self._esc_bound = False          # starts False so the first _sync_esc() binds
 
+        # --- conversation history (survives restarts) ---
+        self.history = History()
+        self._reply_block = None    # the bot block a streamed answer is filling in
+        self._history_order = []    # conversations in the order shown in the list
+
         # The asyncio loop runs on a background thread: streamed answers from the
         # SDK must not block the UI
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
 
         self._build_ui()
+        self._restore_conversation()
         self._start_hotkeys()
         self.root.after(30, self._drain_events)   # drain signals from the pynput thread
         self.root.mainloop()
@@ -108,6 +116,10 @@ class FloatingChat:
                   command=self._quit).pack(side="right", padx=8)
         tk.Button(title, text="⚙", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
                   command=self.toggle_settings).pack(side="right", padx=2)
+        tk.Button(title, text="≡", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
+                  command=self._toggle_history).pack(side="right", padx=2)
+        tk.Button(title, text="+", bg="#3a3a3a", fg=fg, bd=0, font=FONT,
+                  command=self._new_chat).pack(side="right", padx=2)
         for w in (title, label) + tuple(title.winfo_children()):
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
@@ -132,6 +144,22 @@ class FloatingChat:
         self._paint.append(self.opacity_scale)
         self.opacity_scale.set(self.cfg["opacity"])
         self.opacity_scale.pack(fill="x")
+
+        # History panel (collapsed by default)
+        self.history_panel = tk.Frame(self.root, bg=self.cfg["bg"])
+        self._paint.append(self.history_panel)
+        self.history_list = tk.Listbox(
+            self.history_panel, height=7, bg="#2a2a2a", fg=fg, bd=0,
+            highlightthickness=0, font=FONT, activestyle="none",
+            selectbackground="#3d7eff", selectforeground="#ffffff")
+        self.history_list.pack(fill="x", padx=8, pady=(6, 2))
+        hrow = tk.Frame(self.history_panel, bg=self.cfg["bg"])
+        self._paint.append(hrow)
+        hrow.pack(fill="x", padx=8, pady=(0, 6))
+        tk.Button(hrow, text="Open", bg="#3d7eff", fg="white", bd=0, font=FONT,
+                  command=self._open_selected).pack(side="left", padx=(0, 4))
+        tk.Button(hrow, text="Delete", bg="#5a2e2e", fg="#ffb0b0", bd=0,
+                  font=FONT, command=self._delete_selected).pack(side="left")
 
         # Transcript: Text widget tags stand in for bubbles (you = blue, Claude = grey)
         self.chat = tk.Text(self.root, bg=self.cfg["bg"], fg=fg, wrap="word",
@@ -275,6 +303,91 @@ class FloatingChat:
                 pass
         self.root.destroy()
 
+    # ---------- conversation history ----------
+    def _restore_conversation(self):
+        """At startup, bring back the last conversation: replay the text and
+        resume Claude's session so it remembers it too."""
+        conv = self.history.current()
+        if conv is None:
+            return
+        self.session.session_id = conv.get("session_id")
+        self._replay(conv)
+
+    def _replay(self, conv):
+        self.chat.config(state="normal")
+        self.chat.delete("1.0", "end")
+        for m in conv.get("messages", []):
+            self.chat.insert("end", m.get("text", ""), m.get("tag", "bot"))
+        self.chat.config(state="disabled")
+        self.chat.see("end")
+
+    def _new_chat(self):
+        """Archive the current conversation and start a blank one."""
+        if self.sending:
+            return              # don't pull the conversation out from under a stream
+        self.history.save()     # derives the title of the one being archived
+        self.history.new()
+        self.session.session_id = None      # Claude starts fresh as well
+        self._reply_block = None
+        self.pending_shot = None
+        if self.capture.active:
+            self.capture.close()
+        self._sync_esc()
+        self._replay({"messages": []})
+        self._hide_history()
+
+    def _toggle_history(self):
+        if self.history_panel.winfo_manager():
+            self.history_panel.pack_forget()
+        else:
+            self._fill_history()
+            self.history_panel.pack(fill="x", before=self.chat)
+
+    def _hide_history(self):
+        if self.history_panel.winfo_manager():
+            self.history_panel.pack_forget()
+
+    def _fill_history(self):
+        self.history_list.delete(0, "end")
+        self._history_order = self.history.conversations()
+        current = self.history.current()
+        for c in self._history_order:
+            title = c.get("title") or "(empty)"
+            mark = "● " if current and c["id"] == current["id"] else "   "
+            self.history_list.insert(
+                "end", f"{mark}{c.get('updated', '')[:16]}  {title}")
+
+    def _selected_conv(self):
+        sel = self.history_list.curselection()
+        return self._history_order[sel[0]] if sel else None
+
+    def _open_selected(self):
+        conv = self._selected_conv()
+        if conv is None or self.sending:
+            return
+        self.history.save()
+        self.history.select(conv["id"])
+        self.session.session_id = conv.get("session_id")
+        self._reply_block = None
+        self._replay(conv)
+        self._hide_history()
+
+    def _delete_selected(self):
+        conv = self._selected_conv()
+        if conv is None or self.sending:
+            return
+        name = conv.get("title") or "(empty)"
+        if not messagebox.askyesno(
+                "Delete conversation",
+                f"Delete “{name}”?\n\nThis cannot be undone.",
+                parent=self.root):
+            return
+        self.history.delete(conv["id"])
+        self.session.session_id = (self.history.current() or {}).get("session_id")
+        self._reply_block = None
+        self._replay(self.history.current() or {"messages": []})
+        self._fill_history()
+
     # ---------- background customisation ----------
     def toggle_settings(self):
         if self.settings.winfo_manager():
@@ -317,7 +430,10 @@ class FloatingChat:
             self._append_block(f"🙂 You: {text}\n", "user")
         self._sync_esc()
 
-        self._append_block("🤖 Claude: ", "bot")
+        # The reply block is created up front so the streamed chunks can grow it,
+        # and so a restart can replay exactly what was on screen
+        self._reply_block = self.history.add("bot", "🤖 Claude: ")
+        self._insert_text("🤖 Claude: ", "bot")
         self.sending = True
         self.send_btn.config(state="disabled", text="Waiting…")
         # Hand the async task to the background thread's event loop; never block the UI
@@ -325,11 +441,16 @@ class FloatingChat:
         asyncio.run_coroutine_threadsafe(coro, self.loop)
         return "break"   # stop Enter from inserting a newline in the input box
 
-    def _append_block(self, s, tag):
+    def _insert_text(self, s, tag):
         self.chat.config(state="normal")
         self.chat.insert("end", s, tag)
         self.chat.config(state="disabled")
         self.chat.see("end")
+
+    def _append_block(self, s, tag):
+        """Append a finished block: show it, and record it in the history."""
+        self.history.add(tag, s)
+        self._insert_text(s, tag)
 
     async def _run(self, prompt):
         """Runs on the background thread's event loop: receive the answer in pieces"""
@@ -343,10 +464,10 @@ class FloatingChat:
             self.root.after(0, self._finish)
 
     def _append(self, delta):
-        self.chat.config(state="normal")
-        self.chat.insert("end", delta, "bot")
-        self.chat.config(state="disabled")
-        self.chat.see("end")
+        """A streamed chunk: grow the current reply block and show it."""
+        if self._reply_block is not None:
+            self._reply_block["text"] += delta
+        self._insert_text(delta, "bot")
 
     async def _run_vision(self, prompt, shot):
         """Screenshot question: same shape as _run, but via the image channel (vision.py)"""
@@ -364,7 +485,13 @@ class FloatingChat:
     def _finish(self):
         self.sending = False
         self.send_btn.config(state="normal", text="Send")
-        self._append_block("\n", "bot")
+        if self._reply_block is not None:
+            self._reply_block["text"] += "\n"
+        self._insert_text("\n", "bot")
+        self._reply_block = None
+        # Remember Claude's session id so a restart can carry on where it left off
+        self.history.set_session(self.session.session_id)
+        self.history.save()
 
 
 if __name__ == "__main__":
