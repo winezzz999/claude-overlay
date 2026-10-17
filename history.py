@@ -35,6 +35,20 @@ TITLE_LEN = 38
 _USER_PREFIX = re.compile(r"^[^\w]*You:\s*(\[screenshot \d+x\d+\]\s*)?")
 
 
+def _conv_time(conv):
+    """Sort key for a conversation: precise float when available, otherwise
+    fall back to parsing the `updated` display string (conversations written by
+    an older version of this file)."""
+    t = conv.get("created")
+    if isinstance(t, (int, float)):
+        return float(t)
+    try:
+        return time.mktime(time.strptime(conv.get("updated", ""),
+                                         "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        return 0.0
+
+
 class History:
     def __init__(self, path=FILE):
         self.path = path
@@ -70,9 +84,13 @@ class History:
     # ---------- conversations ----------
 
     def conversations(self):
-        """Newest first — that's the order the history list should show."""
-        return sorted(self.data["conversations"],
-                      key=lambda c: c.get("updated", ""), reverse=True)
+        """Newest first (the tab strip shows them reversed, oldest on the left).
+
+        Sorted by a float timestamp, not the `updated` display string — that one
+        only has second precision, so conversations created within the same
+        second would tie and land in the wrong order.
+        """
+        return sorted(self.data["conversations"], key=_conv_time, reverse=True)
 
     def current(self):
         cid = self.data.get("current")
@@ -88,6 +106,7 @@ class History:
             "title": "",
             "session_id": None,
             "messages": [],
+            "created": time.time(),      # float: precise sort key for the tab order
             "updated": self._now(),
         }
         self.data["conversations"].append(conv)

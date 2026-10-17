@@ -12,8 +12,9 @@ versioning follows [Semantic Versioning](https://semver.org/) —
 
 - Conversation history: conversations survive a restart — the transcript is
   replayed **and** Claude's session is resumed, so it remembers what you talked
-  about. New chat / switch / delete from the title bar (+ and ≡); titles are
-  derived from the first question. Stored in `history.json` (gitignored).
+  about. Conversations appear as browser-style tabs under the title bar (click
+  to switch, ✕ to close, + for a new one); titles are derived from the first
+  question. Stored in `history.json` (gitignored).
 - The repository now documents itself in English (README, CHANGELOG, code
   comments), with Chinese versions kept alongside (`*.zh-CN.md`), and a MIT
   license.
