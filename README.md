@@ -29,6 +29,7 @@ It stays out of your way as a small translucent window pinned on top of everythi
 | **Select and ask** | Press <kbd>·</kbd> (the key left of <kbd>1</kbd>). The screen dims, your selection stays bright, then just type your question. |
 | **Full-resolution capture** | The image sent to the model is the real screen pixels, not a downscaled preview. |
 | **Redo the selection** | Not happy with the box? Drag a new one — nothing is locked in until you send. |
+| **Conversation history** | Conversations survive a restart — both the transcript and Claude's memory of it. New chat, switch and delete from the ≡ panel. |
 | **Remembers your look** | Background colour and opacity are saved to `config.json`. |
 
 ## Requirements
@@ -62,6 +63,14 @@ Then either **type a question and press Enter**, or **press <kbd>·</kbd> and dr
 
 Just type. This goes through a persistent Claude session, so it keeps context across turns and can read files in the project.
 
+### Conversations
+
+- **`+`** in the title bar archives the current conversation and starts a blank one
+- **`≡`** opens the history list — click one to switch back to it, or delete it
+- Closing the app keeps everything: next launch restores the last conversation, and Claude picks up where it left off
+
+History lives in `history.json` next to the code (never pushed to the repository). Titles are derived automatically from the first question of each conversation.
+
 These are deliberately **two separate channels** — see below.
 
 ## How it works
@@ -90,6 +99,7 @@ Screenshot questions are intentionally **one-shot**: they don't inherit or pollu
 | File | What it does |
 |---|---|
 | `overlay.py` | The floating window, hotkey handling, stage transitions |
+| `history.py` | Conversation history: transcripts and session ids in `history.json` |
 | `agent.py` | Text chat via `claude-agent-sdk` (streaming, keeps context) |
 | `capture.py` | Full-screen region selector: dimming, bright hole, DPI conversion |
 | `vision.py` | Screenshot questions via the `anthropic` SDK (streaming) |
@@ -98,6 +108,8 @@ Screenshot questions are intentionally **one-shot**: they don't inherit or pollu
 ## Configuration
 
 `config.json` is created the first time you change the background colour or opacity from the ⚙ panel. Deleting it just resets to defaults.
+
+`history.json` holds your conversation transcripts — it is gitignored and never leaves your machine.
 
 Credentials are **never** stored in this repo — they're read at runtime from `~/.claude/settings.json`.
 
